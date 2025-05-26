@@ -3,7 +3,6 @@ import json
 import torch
 import torch.nn as nn
 from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
-from transformers.modeling_outputs import CausalLMOutput
 
 from dskd_loss import dskd_loss_fn
 
@@ -53,27 +52,27 @@ class DSKD(nn.Module):
         return projectors
     
 
-    def forward(self, inputs, outputs):
+    def forward(self, batch):
         s_output = self.s_model(
-            inputs["s_input_ids"],
-            attention_mask=inputs.get("s_attention_mask", None),
-            position_ids=inputs.get("s_position_ids", None),
+            batch["s_input_ids"],
+            attention_mask=batch.get("s_attention_mask", None),
+            position_ids=batch.get("s_position_ids", None),
             output_hidden_states=True
         )
 
         with torch.no_grad():
             self.t_model.eval()
             t_output = self.t_model(
-                inputs["t_input_ids"],
-                attention_mask=inputs.get("t_attention_mask", None),
-                position_ids=inputs.get("t_position_ids", None),
+                batch["t_input_ids"],
+                attention_mask=batch.get("t_attention_mask", None),
+                position_ids=batch.get("t_position_ids", None),
                 output_hidden_states=True
             )
 
 
         student_dict = {
-            "input_ids" : inputs["s_input_ids"],
-            "target_ids" : outputs["s_labels"],
+            "input_ids" : batch["s_input_ids"],
+            "target_ids" : batch["s_labels"],
             "token_embeddings" : self.s_model.model.embed_tokens,
             "hidden_states" : s_output.hidden_states[-1],
             "lm_weights" : self.s_model.lm_head.weight.detach(),
@@ -81,20 +80,23 @@ class DSKD(nn.Module):
         }
 
         teacher_dict = {
-            "input_ids" : inputs["t_input_ids"],
-            "target_ids" : outputs["t_labels"],
+            "input_ids" : batch["t_input_ids"],
+            "target_ids" : batch["t_labels"],
             "token_embeddings" : self.t_model.model.embed_tokens,
             "hidden_states" : t_output.hidden_states[-1],
             "lm_weights" : self.t_model.lm_head.weight.detach(),
             "pad_token_id" : self.t_tokenizer.pad_token_id
         }
 
+        ce_loss = self.ce_loss_fn(s_output.logits, batch["s_labels"]) 
+        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp) / n_batch_tokens
 
-        ce_loss = self.ce_loss_fn(s_output.logits, outputs["s_labels"])
-        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp)
-        loss = self.weighted_loss_fn(ce_loss, kd_loss)
+        n_batch_tokens = batch["s_labels"].ne(-100).sum()
+        token_level_ce_loss = ce_loss / n_batch_tokens
+        token_level_kd_loss = kd_loss / n_batch_tokens
+        token_level_loss = self.weighted_loss_fn(token_level_ce_loss, token_level_kd_loss)
 
-        return CausalLMOutput(loss=loss, logits=s_output.logits)
+        return token_level_loss, token_level_ce_loss, token_level_kd_loss
 
 
 
