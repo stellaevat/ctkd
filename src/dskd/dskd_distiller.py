@@ -88,8 +88,8 @@ class DSKD(nn.Module):
             "pad_token_id" : self.t_tokenizer.pad_token_id
         }
 
-        ce_loss = self.ce_loss_fn(s_output.logits, batch["s_labels"]) 
-        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp) / n_batch_tokens
+        ce_loss = self.ce_loss_fn(s_output.logits, batch["s_labels"]) # TODO: mask out padding
+        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp) # TODO: check if I need to mask out inf
 
         n_batch_tokens = batch["s_labels"].ne(-100).sum()
         token_level_ce_loss = ce_loss / n_batch_tokens
