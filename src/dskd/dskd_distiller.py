@@ -8,10 +8,9 @@ from transformers.modeling_outputs import CausalLMOutput
 from dskd_loss import dskd_loss_fn
 
 
-class KD(nn.Module):
+class DSKD(nn.Module):
     def __init__(self, args, device):
-        super(KD, self).__init__()
-        self.args = args
+        super(DSKD, self).__init__()
         self.device = device
 
         self.s_model, self.s_tokenizer, self.s_hidden_size = self._load_pretrained(args.s_path, args.s_type, args.s_dtype)
@@ -19,9 +18,10 @@ class KD(nn.Module):
         self.projectors = self._load_projectors(args.proj_path)
 
         self.kd_loss_fn = dskd_loss_fn
-        self.ce_loss_fn = nn.CrossEntropyLoss()
+        self.ce_loss_fn = nn.CrossEntropyLoss(reduction='sum')
         self.kl_div_fn = nn.KLDivLoss(reduction='none')
-        self.weighted_loss = lambda ce_loss, kd_loss: (1 - args.kd_weight) * ce_loss + args.kd_weight * kd_loss
+        self.kl_temp = args.kl_temperature
+        self.weighted_loss_fn = lambda ce_loss, kd_loss: (1 - args.kd_weight) * ce_loss + args.kd_weight * kd_loss
         
 
     def _load_pretrained(self, model_path, model_type, model_dtype):
@@ -70,6 +70,7 @@ class KD(nn.Module):
                 output_hidden_states=True
             )
 
+
         student_dict = {
             "input_ids" : inputs["s_input_ids"],
             "target_ids" : outputs["s_labels"],
@@ -88,9 +89,10 @@ class KD(nn.Module):
             "pad_token_id" : self.t_tokenizer.pad_token_id
         }
 
+
         ce_loss = self.ce_loss_fn(s_output.logits, outputs["s_labels"])
-        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn)
-        loss = self.weighted_loss(ce_loss, kd_loss)
+        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp)
+        loss = self.weighted_loss_fn(ce_loss, kd_loss)
 
         return CausalLMOutput(loss=loss, logits=s_output.logits)
 

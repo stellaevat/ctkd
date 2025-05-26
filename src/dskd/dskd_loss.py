@@ -3,18 +3,17 @@ import torch.nn as nn
 
 
 def preprocess_model_data(model_dict):
+    lm_weights = model_dict["lm_weights"]
+    hiddens = model_dict["hidden_states"]
+
     inputs = model_dict["input_ids"]
     targets = model_dict["target_ids"]
     mask = targets.ne(model_dict["pad_token_id"])
-
-    hiddens = model_dict["hidden_states"]
 
     token_embeds = model_dict["token_embeddings"]
     input_embeds = token_embeds[inputs * mask] # line 97
     target_embeds = token_embeds[targets * mask]
     embeds = torch.cat([input_embeds, target_embeds])
-
-    lm_weights = model_dict["lm_weights"]
 
     return lm_weights, targets, hiddens, embeds, target_embeds, mask
 
@@ -34,7 +33,7 @@ def compute_projection_logits(lm_weights, projector, input, attention):
     return proj_logits
 
 
-def dskd_loss_fn(student, teacher, projectors, ce_loss, kl_div):
+def dskd_loss_fn(student, teacher, projectors, ce_loss, kl_div, kl_temp):
     # Preprocessing
     s_lm_weights, s_targets, s_hiddens, s_embeds, s_target_embeds, s_mask = preprocess_model_data(student)
     t_lm_weights, t_targets, t_hiddens, t_embeds, t_target_embeds, t_mask = preprocess_model_data(teacher)
@@ -59,7 +58,7 @@ def dskd_loss_fn(student, teacher, projectors, ce_loss, kl_div):
     # Loss computation
     t2s_ce_loss = ce_loss(t2s_logits, s_targets)
 
-    t2s_kl_div = kl_div(student["logits"], t2s_logits.detach()) # TODO: incorporate temperature
+    t2s_kl_div = kl_div((student["logits"]/kl_temp).log(), t2s_logits/kl_temp)
     t2s_kd_loss = (t2s_kl_div * t2s_mask).sum()
 
     s2t_kl_div = kl_div(s2t_logits, teacher["logits"])
