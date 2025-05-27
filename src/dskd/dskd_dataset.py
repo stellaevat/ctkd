@@ -15,14 +15,19 @@ def load_data(dir, splits=["train", "dev"]):
             for line in f:
                 sample = json.loads(line.strip())
                 samples.append((sample["prompt"], sample["output"]))
-                # samples.append({
-                #     "prompt" : sample["prompt"],
-                #     "response" : sample["output"]
-                # })
 
         data["split"] = samples
 
     return data
+
+
+def pad_data(fill, pad, size, fill_idx, pad_idx=None):
+    padded = torch.ones(size, dtype=torch.long) * pad
+    padded[fill_idx[0] : fill_idx[1]] = fill
+    if pad_idx is not None:
+        padded[pad_idx[0] : pad_idx[1]] = pad
+    return padded
+
 
 def tokenize_data(data, tokenizer, mask_token_id=-100, max_prompt_length=512, max_input_length=1024):
     prompt_kwargs = {
@@ -49,28 +54,23 @@ def tokenize_data(data, tokenizer, mask_token_id=-100, max_prompt_length=512, ma
             response_fields = tokenizer(response, return_tensors='pt')
 
             for (k, v) in prompt_fields.items():
-                input = torch.cat((prompt_fields[k], response_fields[k]), dim=-1)[..., :max_input_length]
-                input_padded = torch.ones(max_input_length, dtype=torch.long) * paddings[k]
-                input_padded[:len(input)-1] = input[:-1]
+                input = torch.cat((prompt_fields[k], response_fields[k]), dim=-1)[:max_input_length]
+                input_padded = pad_data(input[:-1], paddings[k], max_input_length, fill_idx=(0, len(input)-1))
                 split_tokenized[k].append(input_padded)
 
                 if k == "input_ids":
-                    label = torch.ones(max_input_length, dtype=torch.long) * paddings["label"]
-                    label[:len(input)-1] = input[1:]
-                    label[:len(v)-1] = paddings["label"]
+                    fill_idx = (0, len(input)-1)
+                    pad_idx = (0, len(v)-1)
+                    label = pad_data(input[1:], paddings["label"], max_input_length, fill_idx=fill_idx, pad_idx=pad_idx)
+                    loss_mask = pad_data(1.0, paddings["loss_mask"], max_input_length, fill_idx=fill_idx, pad_idx=pad_idx)
+
+                    gen_fill_idx = (-len(v), max_input_length)
+                    gen_input_ids = pad_data(v, paddings["input_ids"], max_input_length, fill_idx=gen_fill_idx)
+                    gen_attention_mask = pad_data(1.0, paddings["attention_mask"], max_input_length, fill_idx=gen_fill_idx)
+
                     split_tokenized["label"].append(label)
-            
-                    loss_mask = torch.ones(max_input_length, dtype=torch.long) * paddings["loss_mask"]
-                    loss_mask[:len(input)-1] = 1.0
-                    loss_mask[:len(v)-1] = paddings["loss_mask"]
                     split_tokenized["loss_mask"].append(loss_mask)
-
-                    gen_input_ids = torch.ones(max_input_length, dtype=torch.long) * paddings["input_ids"]
-                    gen_input_ids[-len(v):] = v
-                    split_tokenized["gen_input_ids"].append(gen_input_ids)
-
-                    gen_attention_mask = torch.ones(max_input_length, dtype=torch.long) * paddings["attention_mask"]
-                    gen_attention_mask[-len(v):] = 1.0
+                    split_tokenized["gen_input_ids"].append(gen_input_ids) 
                     split_tokenized["gen_attention_mask"].append(gen_attention_mask)
 
         for (field, tensors) in split_tokenized.items():
