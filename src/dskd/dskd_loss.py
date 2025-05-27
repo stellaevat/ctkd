@@ -19,6 +19,7 @@ def compute_projection_logits(lm_weights, projector, input, attention):
     return proj_logits
 
 def dskd_loss_fn(s_args, t_args, projectors, kl_temp):
+    # Pre-processing
     s_lm_weights, s_targets, s_hiddens, s_logits, s_input_embeds, s_target_embeds, s_pad_mask = itemgetter(
         "lm_weights", "targets", "hiddens", "logits", "input_embeds", "target_embeds", "mask"
     )(s_args)

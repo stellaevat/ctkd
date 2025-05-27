@@ -107,7 +107,7 @@ class DSKD(nn.Module):
         ce_loss = (s_pad_mask * self.ce_loss_fn(s_logits * s_logits_mask, s_targets * s_pad_mask)).sum()
         kd_loss = self.kd_loss_fn(s_dskd_args, t_dskd_args, self.projectors, self.kl_temp)
 
-        n_batch_tokens = batch["s_labels"].ne(-100).sum()
+        n_batch_tokens = s_targets.ne(self.s_tokenizer.pad_token_id).sum()
         token_level_ce_loss = ce_loss / n_batch_tokens
         token_level_kd_loss = kd_loss / n_batch_tokens
         token_level_loss = self.weighted_loss_fn(token_level_ce_loss, token_level_kd_loss)
