@@ -15,6 +15,7 @@ class DSKD(nn.Module):
         self.s_model, self.s_tokenizer, self.s_hidden_size = self._load_pretrained(args.s_path, args.s_type, args.s_dtype)
         self.t_model, self.t_tokenizer, self.t_hidden_size = self._load_pretrained(args.t_path, args.t_type, args.t_dtype)
         self.projectors = self._load_projectors(args.proj_path)
+        self.mask_token_id = -100
 
         self.kl_temp = args.kl_temperature
         self.kd_loss_fn = dskd_loss_fn
@@ -29,7 +30,7 @@ class DSKD(nn.Module):
         model = AutoModelForCausalLM.from_pretrained(model_path, config=config, torch_dtype=model_dtype, trust_remote_code=True)
         model.gradient_checkpointing_enable()
 
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, add_eos_token=True, add_bos_token=False, trust_remote_code=True)
         tokenizer.eos_token_id = 151643 if model_type == "qwen" else tokenizer.eos_token_id
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -60,7 +61,7 @@ class DSKD(nn.Module):
         target_ids = batch[f"{model_prefix}_labels"]
 
         pad_token_id = vars(self)[f"{model_prefix}_tokenizer"].pad_token_id
-        mask = target_ids.ne(pad_token_id)
+        mask = target_ids.ne(pad_token_id) & target_ids.ne(self.mask_token_id)
 
         token_embeds = vars(self)[f"{model_prefix}_model"].model.embed_tokens
         input_embeds = token_embeds[input_ids * mask] # line 97
@@ -107,7 +108,7 @@ class DSKD(nn.Module):
         ce_loss = (s_pad_mask * self.ce_loss_fn(s_logits * s_logits_mask, s_targets * s_pad_mask)).sum()
         kd_loss = self.kd_loss_fn(s_dskd_args, t_dskd_args, self.projectors, self.kl_temp)
 
-        n_batch_tokens = s_targets.ne(self.s_tokenizer.pad_token_id).sum()
+        n_batch_tokens = (s_targets.ne(self.s_tokenizer.pad_token_id) & s_targets.ne(self.mask_token_id)).sum()
         token_level_ce_loss = ce_loss / n_batch_tokens
         token_level_kd_loss = kd_loss / n_batch_tokens
         token_level_loss = self.weighted_loss_fn(token_level_ce_loss, token_level_kd_loss)
