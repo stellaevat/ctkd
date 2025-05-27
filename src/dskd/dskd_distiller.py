@@ -52,6 +52,34 @@ class DSKD(nn.Module):
         return projectors
     
 
+    def _get_dskd_args(self, model_prefix, batch, output):
+        lm_weights = vars(self)[f"{model_prefix}_model"].lm_head.weight.detach()
+        hiddens = output.hidden_states[-1]
+        logits = output.logits
+        
+        input_ids = batch[f"{model_prefix}_input_ids"]
+        target_ids = batch[f"{model_prefix}_labels"]
+
+        pad_token_id = vars(self)[f"{model_prefix}_tokenizer"].pad_token_id
+        mask = target_ids.ne(pad_token_id)
+
+        token_embeds = vars(self)[f"{model_prefix}_model"].model.embed_tokens
+        input_embeds = token_embeds[input_ids * mask] # line 97
+        target_embeds = token_embeds[target_ids * mask]
+
+        dskd_args = {
+            "lm_weights" : lm_weights,
+            "targets" : target_ids,
+            "hiddens" : hiddens,
+            "logits" : logits,
+            "input_embeds" : input_embeds,
+            "target_embeds" : target_embeds,
+            "mask" : mask
+        }
+        
+        return dskd_args
+    
+
     def forward(self, batch):
         s_output = self.s_model(
             batch["s_input_ids"],
@@ -69,27 +97,18 @@ class DSKD(nn.Module):
                 output_hidden_states=True
             )
 
+        s_dskd_args = self._get_dskd_args("s", batch, s_output)
+        t_dskd_args = self._get_dskd_args("t", batch, t_output)
 
-        student_dict = {
-            "input_ids" : batch["s_input_ids"],
-            "target_ids" : batch["s_labels"],
-            "token_embeddings" : self.s_model.model.embed_tokens,
-            "hidden_states" : s_output.hidden_states[-1],
-            "lm_weights" : self.s_model.lm_head.weight.detach(),
-            "pad_token_id" : self.s_tokenizer.pad_token_id
-        }
+        s_logits = s_output.logits
+        s_logits_clean = torch.where(
+            (s_logits.isnan() | s_logits.isinf()), 
+            s_logits, 
+            torch.zeros_like(s_logits)
+        )
 
-        teacher_dict = {
-            "input_ids" : batch["t_input_ids"],
-            "target_ids" : batch["t_labels"],
-            "token_embeddings" : self.t_model.model.embed_tokens,
-            "hidden_states" : t_output.hidden_states[-1],
-            "lm_weights" : self.t_model.lm_head.weight.detach(),
-            "pad_token_id" : self.t_tokenizer.pad_token_id
-        }
-
-        ce_loss = self.ce_loss_fn(s_output.logits, batch["s_labels"]) # TODO: mask out padding
-        kd_loss = self.kd_loss_fn(student_dict, teacher_dict, self.projectors, self.ce_loss_fn, self.kl_div_fn, self.kl_temp) # TODO: check if I need to mask out inf
+        ce_loss = self.ce_loss_fn(s_logits_clean, s_dskd_args["s_target_embeds"])
+        kd_loss = self.kd_loss_fn(s_dskd_args, t_dskd_args, self.projectors, self.kl_temp)
 
         n_batch_tokens = batch["s_labels"].ne(-100).sum()
         token_level_ce_loss = ce_loss / n_batch_tokens
