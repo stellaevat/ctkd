@@ -16,10 +16,9 @@ class DSKD(nn.Module):
         self.t_model, self.t_tokenizer, self.t_hidden_size = self._load_pretrained(args.t_path, args.t_type, args.t_dtype)
         self.projectors = self._load_projectors(args.proj_path)
 
-        self.kd_loss_fn = dskd_loss_fn
-        self.ce_loss_fn = nn.CrossEntropyLoss(reduction='sum')
-        self.kl_div_fn = nn.KLDivLoss(reduction='none')
         self.kl_temp = args.kl_temperature
+        self.kd_loss_fn = dskd_loss_fn
+        self.ce_loss_fn = nn.CrossEntropyLoss(reduction='none')
         self.weighted_loss_fn = lambda ce_loss, kd_loss: (1 - args.kd_weight) * ce_loss + args.kd_weight * kd_loss
         
 
@@ -100,14 +99,12 @@ class DSKD(nn.Module):
         s_dskd_args = self._get_dskd_args("s", batch, s_output)
         t_dskd_args = self._get_dskd_args("t", batch, t_output)
 
+        s_targets = batch["s_labels"]
         s_logits = s_output.logits
-        s_logits_clean = torch.where(
-            (s_logits.isnan() | s_logits.isinf()), 
-            s_logits, 
-            torch.zeros_like(s_logits)
-        )
+        s_logits_mask = 1 - (s_logits.isnan() | s_logits.isinf())
+        s_pad_mask = s_dskd_args["mask"]
 
-        ce_loss = self.ce_loss_fn(s_logits_clean, s_dskd_args["s_target_embeds"])
+        ce_loss = (s_pad_mask * self.ce_loss_fn(s_logits * s_logits_mask, s_targets * s_pad_mask)).sum()
         kd_loss = self.kd_loss_fn(s_dskd_args, t_dskd_args, self.projectors, self.kl_temp)
 
         n_batch_tokens = batch["s_labels"].ne(-100).sum()
