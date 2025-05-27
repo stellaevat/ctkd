@@ -29,7 +29,7 @@ def pad_data(fill, pad, size, fill_idx, pad_idx=None):
     return padded
 
 
-def tokenize_data(data, tokenizer, mask_token_id=-100, max_prompt_length=512, max_input_length=1024):
+def tokenize_data(data, tokenizer, prefix, mask_token_id=-100, max_prompt_length=512, max_input_length=1024):
     prompt_kwargs = {
         "add_special_tokens" : False,
         "truncation" : True, 
@@ -56,7 +56,7 @@ def tokenize_data(data, tokenizer, mask_token_id=-100, max_prompt_length=512, ma
             for (k, v) in prompt_fields.items():
                 input = torch.cat((prompt_fields[k], response_fields[k]), dim=-1)[:max_input_length]
                 input_padded = pad_data(input[:-1], paddings[k], max_input_length, fill_idx=(0, len(input)-1))
-                split_tokenized[k].append(input_padded)
+                split_tokenized[f"{prefix}_{k}"].append(input_padded)
 
                 if k == "input_ids":
                     fill_idx = (0, len(input)-1)
@@ -68,17 +68,28 @@ def tokenize_data(data, tokenizer, mask_token_id=-100, max_prompt_length=512, ma
                     gen_input_ids = pad_data(v, paddings["input_ids"], max_input_length, fill_idx=gen_fill_idx)
                     gen_attention_mask = pad_data(1.0, paddings["attention_mask"], max_input_length, fill_idx=gen_fill_idx)
 
-                    split_tokenized["label"].append(label)
-                    split_tokenized["loss_mask"].append(loss_mask)
-                    split_tokenized["gen_input_ids"].append(gen_input_ids) 
-                    split_tokenized["gen_attention_mask"].append(gen_attention_mask)
+                    split_tokenized[f"{prefix}_label"].append(label)
+                    split_tokenized[f"{prefix}_loss_mask"].append(loss_mask)
+                    split_tokenized[f"{prefix}_gen_input_ids"].append(gen_input_ids) 
+                    split_tokenized[f"{prefix}_gen_attention_mask"].append(gen_attention_mask)
 
         for (field, tensors) in split_tokenized.items():
             split_tokenized[field] = torch.cat(tensors, dim=-1)
 
         data_tokenized[split] = split_tokenized
 
-    return DatasetDict(data_tokenized)
+    return data_tokenized
+
+def build_student_teacher_dataset(distiller, data_dir, data_splits=["train", "dev"]):
+    data = load_data(data_dir, data_splits)
+    s_data_tokenized = tokenize_data(data, distiller.s_tokenizer, "s", distiller.mask_token_id, distiller.max_prompt_length, distiller.max_input_length)
+    t_data_tokenized = tokenize_data(data, distiller.t_tokenizer, "t", distiller.mask_token_id,distiller. max_prompt_length, distiller.max_input_length)
+
+    dataset_dict = {}
+    for split in data_splits:
+        dataset_dict[split] = s_data_tokenized[split] | t_data_tokenized[split]
+
+    return DatasetDict(dataset_dict)
 
 
 

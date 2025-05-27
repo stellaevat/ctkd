@@ -6,6 +6,7 @@ from torch.optim import AdamW
 from transformers import get_scheduler
 
 from dskd_distiller import DSKD
+from dskd_dataset import build_student_teacher_dataset
 
 def show_results(epoch, loss, ce_loss, kd_loss, metrics):
   print(f"\n\nEPOCH {epoch}\n")
@@ -26,7 +27,7 @@ def full_determinism(seed=74):
 
 
 def eval_student(distiller, dataset, device, batch_size=32, testing=False, verbose=False):
-    split = "test" if testing else "val"
+    split = "test" if testing else "dev"
     dataloader = DataLoader(dataset[split], batch_size=batch_size)
 
     distiller.eval()
@@ -47,7 +48,8 @@ def eval_student(distiller, dataset, device, batch_size=32, testing=False, verbo
     return metric_dict
 
 
-def train_student(distiller, dataset, device, epochs=10, batch_size=32, learning_rate=1e-5, verbose=True):
+def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epochs=10, batch_size=32, learning_rate=1e-5, verbose=True):
+    dataset = build_student_teacher_dataset(distiller, data_dir, data_splits)
     dataloader = DataLoader(dataset["train"], shuffle=True, batch_size=batch_size)
     num_training_steps = epochs * len(dataloader)
 
