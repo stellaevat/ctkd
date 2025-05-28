@@ -2,7 +2,8 @@ import os
 import json
 import torch
 from collections import defaultdict
-from datasets import Dataset, DatasetDict
+from tqdm import tqdm
+from datasets import Dataset, DatasetDict, concatenate_datasets
 
 def load_data(dir, splits=["train", "dev"]):
     data = {}
@@ -16,7 +17,7 @@ def load_data(dir, splits=["train", "dev"]):
                 sample = json.loads(line.strip())
                 samples.append((sample["prompt"], sample["output"]))
 
-        data["split"] = samples
+        data[split] = samples
 
     return data
 
@@ -49,23 +50,23 @@ def tokenize_data(data, tokenizer, prefix, mask_token_id=-100, max_prompt_length
     for (split, samples) in data.items():
         split_tokenized = defaultdict(list)
 
-        for (prompt, response) in samples:
-            prompt_fields = tokenizer(prompt, return_tensors='pt', **prompt_kwargs)
-            response_fields = tokenizer(response, return_tensors='pt')
+        for (prompt, response) in tqdm(samples):
+            prompt_fields = tokenizer.encode_plus(prompt, return_tensors='pt', **prompt_kwargs)
+            response_fields = tokenizer.encode_plus(response, return_tensors='pt')
 
             for (k, v) in prompt_fields.items():
-                input = torch.cat((prompt_fields[k], response_fields[k]), dim=-1)[:max_input_length]
+                input = torch.cat((prompt_fields[k][0], response_fields[k][0]), dim=-1)[:max_input_length]
                 input_padded = pad_data(input[:-1], paddings[k], max_input_length, fill_idx=(0, len(input)-1))
                 split_tokenized[f"{prefix}_{k}"].append(input_padded)
 
                 if k == "input_ids":
                     fill_idx = (0, len(input)-1)
-                    pad_idx = (0, len(v)-1)
+                    pad_idx = (0, len(v[0])-1)
                     label = pad_data(input[1:], paddings["label"], max_input_length, fill_idx=fill_idx, pad_idx=pad_idx)
                     loss_mask = pad_data(1.0, paddings["loss_mask"], max_input_length, fill_idx=fill_idx, pad_idx=pad_idx)
 
-                    gen_fill_idx = (-len(v), max_input_length)
-                    gen_input_ids = pad_data(v, paddings["input_ids"], max_input_length, fill_idx=gen_fill_idx)
+                    gen_fill_idx = (-len(v[0]), max_input_length)
+                    gen_input_ids = pad_data(v[0], paddings["input_ids"], max_input_length, fill_idx=gen_fill_idx)
                     gen_attention_mask = pad_data(1.0, paddings["attention_mask"], max_input_length, fill_idx=gen_fill_idx)
 
                     split_tokenized[f"{prefix}_label"].append(label)
@@ -73,10 +74,11 @@ def tokenize_data(data, tokenizer, prefix, mask_token_id=-100, max_prompt_length
                     split_tokenized[f"{prefix}_gen_input_ids"].append(gen_input_ids) 
                     split_tokenized[f"{prefix}_gen_attention_mask"].append(gen_attention_mask)
 
+        split_tokenized_collated = {}
         for (field, tensors) in split_tokenized.items():
-            split_tokenized[field] = torch.cat(tensors, dim=-1)
+            split_tokenized_collated[field] = torch.cat(tensors, dim=-1)
 
-        data_tokenized[split] = split_tokenized
+        data_tokenized[split] = split_tokenized_collated
 
     return data_tokenized
 
@@ -84,19 +86,11 @@ def build_student_teacher_dataset(distiller, data_dir, data_splits=["train", "de
     data = load_data(data_dir, data_splits)
     s_data_tokenized = tokenize_data(data, distiller.s_tokenizer, "s", distiller.mask_token_id, distiller.max_prompt_length, distiller.max_input_length)
     t_data_tokenized = tokenize_data(data, distiller.t_tokenizer, "t", distiller.mask_token_id,distiller. max_prompt_length, distiller.max_input_length)
-
-    dataset_dict = {}
+    
+    datasets = {}
     for split in data_splits:
-        dataset_dict[split] = s_data_tokenized[split] | t_data_tokenized[split]
+        datasets[split] = Dataset.from_dict(s_data_tokenized[split] | t_data_tokenized[split])
 
-    return DatasetDict(dataset_dict)
-
-
-
-
-
-
-
-
-        
-        
+    dataset_dict = DatasetDict(datasets)
+    dataset_dict.set_format(type="torch")
+    return dataset_dict

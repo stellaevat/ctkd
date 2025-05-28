@@ -96,17 +96,18 @@ if __name__ == '__main__':
     data_dir = "data/dolly"
 
     args = AttrDict({
-        "s_path" : "models/gpt2/gpt2-base",
+        "s_path" : "gpt2",
         "s_type" : "gpt2",
-        "s_dtype" : "fp16",
-        "t_path" : "models/qwen/Qwen1.5-1.8B",
+        "s_dtype" : torch.bfloat16,
+        "t_path" : "qwen/Qwen1.5-1.8B",
         "t_type" : "qwen",
-        "t_dtype" : "fp16",
+        "t_dtype" : torch.bfloat16,
         "proj_path" : "models/projectors.pth",
         "kl_temperature" : 1,
         "kd_weight" : 0.5,
     })
     distiller = DSKD(args, device)
 
+    full_determinism()
     train_student(distiller, device, data_dir)
 

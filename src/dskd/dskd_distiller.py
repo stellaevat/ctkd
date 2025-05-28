@@ -15,7 +15,10 @@ class DSKD(nn.Module):
         self.s_model, self.s_tokenizer, self.s_hidden_size = self._load_pretrained(args.s_path, args.s_type, args.s_dtype)
         self.t_model, self.t_tokenizer, self.t_hidden_size = self._load_pretrained(args.t_path, args.t_type, args.t_dtype)
         self.projectors = self._load_projectors(args.proj_path)
+
         self.mask_token_id = -100
+        self.max_prompt_length = 512
+        self.max_input_length = 1024
 
         self.kl_temp = args.kl_temperature
         self.kd_loss_fn = dskd_loss_fn
