@@ -100,7 +100,7 @@ class DSKD(nn.Module):
         s_dskd_args = self._get_dskd_args("s", batch, s_output)
         t_dskd_args = self._get_dskd_args("t", batch, t_output)
 
-        s_targets = batch["s_labels"]
+        s_targets = batch["s_label"]
         s_logits = s_output.logits
         s_logits_mask = 1 - (s_logits.isnan() | s_logits.isinf())
         s_pad_mask = s_dskd_args["mask"]
@@ -113,7 +113,7 @@ class DSKD(nn.Module):
         token_level_kd_loss = kd_loss / n_batch_tokens
         token_level_loss = self.weighted_loss_fn(token_level_ce_loss, token_level_kd_loss)
 
-        return token_level_loss, token_level_ce_loss, token_level_kd_loss
+        return token_level_loss, token_level_ce_loss, token_level_kd_loss, s_logits
 
 
 

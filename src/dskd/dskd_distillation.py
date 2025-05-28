@@ -1,6 +1,8 @@
+import evaluate
 import torch
 from tqdm import tqdm
 from pprint import pprint
+from attrdict import AttrDict
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from transformers import get_scheduler
@@ -26,9 +28,10 @@ def full_determinism(seed=74):
     torch.backends.cudnn.deterministic = True
 
 
-def eval_student(distiller, dataset, device, batch_size=32, testing=False, verbose=False):
+def eval_student(distiller, dataset, device, batch_size=8, testing=False, verbose=False):
     split = "test" if testing else "dev"
     dataloader = DataLoader(dataset[split], batch_size=batch_size)
+    accuracy = evaluate.load('accuracy')
 
     distiller.eval()
     avg_loss = 0.0
@@ -37,18 +40,22 @@ def eval_student(distiller, dataset, device, batch_size=32, testing=False, verbo
         batch_ratio = len(batch) / len(dataset[split])
 
         with torch.no_grad():
-            loss, _, _ = distiller(**batch)
+            loss, _, _, logits = distiller(**batch)
 
         avg_loss += loss * batch_ratio
 
-    metric_dict = {("Test loss" if testing else "Validation loss") : avg_loss}
+        predictions = torch.argmax(logits.cpu(), dim=-1)
+        accuracy.add_batch(predictions=predictions, references=batch["s_label"].cpu())
 
-    # TODO: add more metrics (e.g. Accuracy, Rouge-L)
+    metric_dict = {("Test loss" if testing else "Validation loss") : avg_loss}
+    metric_dict.update(accuracy.compute())
+
+    # TODO: add more metrics (e.g. Rouge-L)
 
     return metric_dict
 
 
-def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epochs=10, batch_size=32, learning_rate=1e-5, verbose=True):
+def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epochs=10, batch_size=4, learning_rate=2e-4, verbose=True):
     dataset = build_student_teacher_dataset(distiller, data_dir, data_splits)
     dataloader = DataLoader(dataset["train"], shuffle=True, batch_size=batch_size)
     num_training_steps = epochs * len(dataloader)
@@ -65,7 +72,7 @@ def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epo
             batch = {k : v.to(device) for (k, v) in batch.items()}
             batch_ratio = len(batch) / len(dataset["train"])
 
-            loss, ce_loss, kd_loss = distiller(**batch)
+            loss, ce_loss, kd_loss, _ = distiller(**batch)
             
             avg_loss += loss * batch_ratio
             avg_ce_loss += ce_loss * batch_ratio
@@ -84,3 +91,22 @@ def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epo
         if verbose:
             show_results(avg_loss, avg_ce_loss, avg_kd_loss, metrics)
             
+if __name__ == '__main__':
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    data_dir = "data/dolly"
+
+    args = AttrDict({
+        "s_path" : "models/gpt2/gpt2-base",
+        "s_type" : "gpt2",
+        "s_dtype" : "fp16",
+        "t_path" : "models/qwen/Qwen1.5-1.8B",
+        "t_type" : "qwen",
+        "t_dtype" : "fp16",
+        "proj_path" : "models/projectors.pth",
+        "kl_temperature" : 1,
+        "kd_weight" : 0.5,
+    })
+    distiller = DSKD(args, device)
+
+    train_student(distiller, device, data_dir)
+

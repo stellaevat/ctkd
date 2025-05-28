@@ -2,7 +2,7 @@ import os
 import json
 import torch
 from collections import defaultdict
-from torch.utils.data import Dataset, DatasetDict
+from datasets import Dataset, DatasetDict
 
 def load_data(dir, splits=["train", "dev"]):
     data = {}
