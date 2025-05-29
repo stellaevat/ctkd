@@ -11,6 +11,8 @@ class DSKD(nn.Module):
     def __init__(self, args, device):
         super(DSKD, self).__init__()
         self.device = device
+        self.s_dtype = args.s_dtype
+        self.t_dtype = args.t_dtype
 
         self.s_model, self.s_tokenizer, self.s_hidden_size = self._load_pretrained(args.s_path, args.s_type, args.s_dtype)
         self.t_model, self.t_tokenizer, self.t_hidden_size = self._load_pretrained(args.t_path, args.t_type, args.t_dtype)
@@ -30,7 +32,7 @@ class DSKD(nn.Module):
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         hidden_size = config.n_embed if hasattr(config, "n_embed") else config.hidden_size
         
-        model = AutoModelForCausalLM.from_pretrained(model_path, config=config, torch_dtype=model_dtype, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(model_path, config=config, torch_dtype=model_dtype, device_map=self.device, trust_remote_code=True)
         model.gradient_checkpointing_enable()
 
         tokenizer = AutoTokenizer.from_pretrained(model_path, add_eos_token=True, add_bos_token=False, trust_remote_code=True)
@@ -42,12 +44,12 @@ class DSKD(nn.Module):
 
     def _load_projectors(self, proj_path):
         projectors = nn.ModuleDict()
-        projectors["s2t"] = nn.Linear(self.s_hidden_size, self.t_hidden_size)
-        projectors["t2s"] = nn.Linear(self.t_hidden_size, self.s_hidden_size)
-        projectors["query"] = nn.Linear(2 * self.s_hidden_size, 2 * self.t_hidden_size)
+        projectors["s2t"] = nn.Linear(self.s_hidden_size, self.t_hidden_size).type(self.s_dtype).to(self.device)
+        projectors["t2s"] = nn.Linear(self.t_hidden_size, self.s_hidden_size).type(self.t_dtype).to(self.device)
+        projectors["query"] = nn.Linear(2 * self.s_hidden_size, 2 * self.t_hidden_size).type(self.s_dtype).to(self.device)
         
         if os.path.exists(proj_path):
-            params = torch.load(proj_path, map_location=f"cuda:{self.device}")
+            params = torch.load(proj_path, map_location=self.device)
             for proj_name in projectors:
                 state_dict = {k.split('.', 1)[1] : v for (k, v) in params.items() if k.startswith(proj_name)}
                 projectors[proj_name].load_state_dict(state_dict)
@@ -56,19 +58,27 @@ class DSKD(nn.Module):
     
 
     def _get_dskd_args(self, model_prefix, batch, output):
-        lm_weights = vars(self)[f"{model_prefix}_model"].lm_head.weight.detach()
+        model = getattr(self, f"{model_prefix}_model")
+        tokenizer = getattr(self, f"{model_prefix}_tokenizer")
+
+        lm_weights = model.lm_head.weight.detach()
         hiddens = output.hidden_states[-1]
         logits = output.logits
         
         input_ids = batch[f"{model_prefix}_input_ids"]
-        target_ids = batch[f"{model_prefix}_labels"]
+        target_ids = batch[f"{model_prefix}_label"]
+        mask = target_ids.ne(tokenizer.pad_token_id) & target_ids.ne(self.mask_token_id)
 
-        pad_token_id = vars(self)[f"{model_prefix}_tokenizer"].pad_token_id
-        mask = target_ids.ne(pad_token_id) & target_ids.ne(self.mask_token_id)
+        if hasattr(model, "model"):
+            if hasattr(model.model, "embed_tokens"):
+                token_embeds = model.model.embed_tokens
+            elif hasattr(model.model, "model"):
+                token_embeds = model.model.model.embed_tokens
+        elif hasattr(model, "transformer"):
+            token_embeds = model.transformer.wte
 
-        token_embeds = vars(self)[f"{model_prefix}_model"].model.embed_tokens
-        input_embeds = token_embeds[input_ids * mask] # line 97
-        target_embeds = token_embeds[target_ids * mask]
+        input_embeds = token_embeds(input_ids * mask).detach() # line 97
+        target_embeds = token_embeds(target_ids * mask).detach()
 
         dskd_args = {
             "lm_weights" : lm_weights,
@@ -105,10 +115,10 @@ class DSKD(nn.Module):
 
         s_targets = batch["s_label"]
         s_logits = s_output.logits
-        s_logits_mask = 1 - (s_logits.isnan() | s_logits.isinf())
+        s_logits_mask = ~(s_logits.isnan() | s_logits.isinf())
         s_pad_mask = s_dskd_args["mask"]
 
-        ce_loss = (s_pad_mask * self.ce_loss_fn(s_logits * s_logits_mask, s_targets * s_pad_mask)).sum()
+        ce_loss = (s_pad_mask * self.ce_loss_fn((s_logits * s_logits_mask).transpose(-1, -2), s_targets * s_pad_mask)).sum()
         kd_loss = self.kd_loss_fn(s_dskd_args, t_dskd_args, self.projectors, self.kl_temp)
 
         n_batch_tokens = (s_targets.ne(self.s_tokenizer.pad_token_id) & s_targets.ne(self.mask_token_id)).sum()

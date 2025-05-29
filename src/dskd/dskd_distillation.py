@@ -98,7 +98,7 @@ def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epo
             
 if __name__ == '__main__':
     full_determinism()
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
     data_dir = "data/dolly"
 
     args = Dict({
