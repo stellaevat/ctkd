@@ -27,7 +27,7 @@ def pad_data(fill, pad, size, fill_idx, pad_idx=None):
     padded[fill_idx[0] : fill_idx[1]] = fill
     if pad_idx is not None:
         padded[pad_idx[0] : pad_idx[1]] = pad
-    return padded
+    return padded.unsqueeze(0)
 
 
 def tokenize_data(data, tokenizer, prefix, mask_token_id=-100, max_prompt_length=512, max_input_length=1024):
@@ -76,7 +76,7 @@ def tokenize_data(data, tokenizer, prefix, mask_token_id=-100, max_prompt_length
 
         split_tokenized_collated = {}
         for (field, tensors) in split_tokenized.items():
-            split_tokenized_collated[field] = torch.cat(tensors, dim=-1)
+            split_tokenized_collated[field] = torch.cat(tensors, dim=0)
 
         data_tokenized[split] = split_tokenized_collated
 
@@ -89,7 +89,8 @@ def build_student_teacher_dataset(distiller, data_dir, data_splits=["train", "de
     
     datasets = {}
     for split in data_splits:
-        datasets[split] = Dataset.from_dict(s_data_tokenized[split] | t_data_tokenized[split])
+        comb_data_tokenized = s_data_tokenized[split] | t_data_tokenized[split]
+        datasets[split] = Dataset.from_dict(comb_data_tokenized)
 
     dataset_dict = DatasetDict(datasets)
     dataset_dict.set_format(type="torch")

@@ -2,7 +2,7 @@ import evaluate
 import torch
 from tqdm import tqdm
 from pprint import pprint
-from attrdict import AttrDict
+from addict import Dict
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from transformers import get_scheduler
@@ -72,7 +72,7 @@ def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epo
             batch = {k : v.to(device) for (k, v) in batch.items()}
             batch_ratio = len(batch) / len(dataset["train"])
 
-            loss, ce_loss, kd_loss, _ = distiller(**batch)
+            loss, ce_loss, kd_loss, _ = distiller(batch)
             
             avg_loss += loss * batch_ratio
             avg_ce_loss += ce_loss * batch_ratio
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     data_dir = "data/dolly"
 
-    args = AttrDict({
+    args = Dict({
         "s_path" : "gpt2",
         "s_type" : "gpt2",
         "s_dtype" : torch.bfloat16,
