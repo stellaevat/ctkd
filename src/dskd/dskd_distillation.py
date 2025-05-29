@@ -1,3 +1,4 @@
+import os
 import evaluate
 import torch
 from tqdm import tqdm
@@ -20,6 +21,10 @@ def show_results(epoch, loss, ce_loss, kd_loss, metrics):
 
 
 def full_determinism(seed=74):
+    os.environ['TORCH_USE_CUDA_DSA'] = "1"
+    os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ":4096:8"
+
     # random.seed(seed)
     # np.random.seed(seed)
     torch.manual_seed(seed)
@@ -92,6 +97,7 @@ def train_student(distiller, device, data_dir, data_splits=["train", "dev"], epo
             show_results(avg_loss, avg_ce_loss, avg_kd_loss, metrics)
             
 if __name__ == '__main__':
+    full_determinism()
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     data_dir = "data/dolly"
 
@@ -107,7 +113,5 @@ if __name__ == '__main__':
         "kd_weight" : 0.5,
     })
     distiller = DSKD(args, device)
-
-    full_determinism()
     train_student(distiller, device, data_dir)
 
